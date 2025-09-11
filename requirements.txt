@@ -1,0 +1,6 @@
+requests
+Crypto
+brotli
+qrcode
+ascii_magic
+pycryptodome
