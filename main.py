@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 
 # Ambil token bot dari variabel lingkungan untuk keamanan
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7515743847:AAEu5xj47eIJ5blvKPIRZr0Va_e1w0JkLM8")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8319444433:AAHRLxXy4hqGnXsVLR_vSwCIsnSirX_vwcE")
 
 # Inisialisasi aplikasi Flask
 app = Flask(__name__)
