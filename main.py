@@ -2,8 +2,14 @@ import os
 import threading
 import logging
 from flask import Flask, jsonify
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Updater, CommandHandler, CallbackQueryHandler, CallbackContext,
+    MessageHandler, Filters, JobQueue
+)
+
+
 
 # Impor semua fungsi dari file Anda yang sudah ada
 from auth_helper import AuthInstance, get_otp_and_handle_session, submit_otp_and_login_session
