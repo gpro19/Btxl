@@ -16,7 +16,7 @@ COPY . .
 # Tetapkan variabel lingkungan yang diperlukan oleh aplikasi Anda.
 # Anda harus mengganti nilai-nilai ini dengan milik Anda sendiri saat menjalankan container.
 # Contoh: -e API_KEY="your_api_key_here"
-ENV API_KEY="vT8tINqHaOxXbGE7eOWAhA=="
+ENV API_KEY="ed17ec92-a8e4-42d0-a635-4c62a982ed0a"
 ENV AES_KEY_ASCII="5dccbf08920a5527"
 ENV BASE_API_URL="https://api.myxl.xlaxiata.co.id"
 ENV BASE_CIAM_URL="https://gede.ciam.xlaxiata.co.id"
