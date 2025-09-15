@@ -1,4 +1,5 @@
-from api_request import get_family
+import json
+from api_request import send_api_request, get_family
 from auth_helper import AuthInstance
 
 PACKAGE_FAMILY_CODE = "08a3b1e6-8e78-4e45-a540-b40f06871cfe"
@@ -14,7 +15,7 @@ def get_package_xut():
     data = get_family(api_key, tokens, PACKAGE_FAMILY_CODE)
     if not data or not data.get("package_variants"):
         return None
-
+        
     package_variants = data["package_variants"]
     
     for variant in package_variants:
