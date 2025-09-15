@@ -1,173 +1,223 @@
 import os
 import threading
+import json
 import logging
 from flask import Flask, jsonify
-
-# Impor kelas yang diperlukan untuk python-telegram-bot versi 13.7
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+    Updater, CommandHandler, MessageHandler, Filters,
+    CallbackContext
 )
-
-# Impor semua fungsi dari file Anda yang sudah ada
-from auth_helper import AuthInstance, get_otp_and_handle_session, submit_otp_and_login_session
-from my_package import get_my_packages_data
+from auth_helper import AuthInstance
+from my_package import fetch_my_packages
 from paket_xut import get_package_xut
 from paket_custom_family import get_packages_by_family
-from api_request import get_balance
-from purchase_api import settlement_multipayment
+from api_request import get_balance, get_otp, submit_otp
 
-# Aktifkan logging untuk melacak bot
+# Konfigurasi logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# Ambil token bot dari variabel lingkungan untuk keamanan
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8319444433:AAHRLxXy4hqGnXsVLR_vSwCIsnSirX_vwcE")
+# Variabel Lingkungan
+BOT_TOKEN = "8319444433:AAHRLxXy4hqGnXsVLR_vSwCIsnSirX_vwcE"
+BASE_API_URL = "https://api.myxl.xlaxiata.co.id"
+BASE_CIAM_URL = "https://gede.ciam.xlaxiata.co.id"
+BASIC_AUTH = "OWZjOTdlZDEtNmEzMC00OGQ1LTk1MTYtNjBjNTNjZTNhMTM1OllEV21GNExKajlYSUt3UW56eTJlMmxiMHRKUWIyOW8z"
+AX_DEVICE_ID = "92fb44c0804233eb4d9e29f838223a14"
+AX_FP_KEY = "18b4d589826af50241177961590e6693"
+UA = "myXL / 8.6.0(1179); com.android.vending; (samsung; SM-N935F; SDK 33; Android 13"
+API_KEY = "vT8tINqHaOxXbGE7eOWAhA=="
+AES_KEY_ASCII = "5dccbf08920a5527"
 
-# Inisialisasi aplikasi Flask
+# Inisialisasi AuthInstance
+AuthInstance.api_key = API_KEY
+AuthInstance.aes_key_ascii = AES_KEY_ASCII
+
+# Inisialisasi Flask
 app = Flask(__name__)
-
-# --- Handler untuk Perintah Telegram ---
-def start(update: Update, context: CallbackContext) -> None:
-    """Mengirim pesan sambutan saat perintah /start diberikan."""
-    update.message.reply_text(
-        "Selamat datang! Kirim nomor XL Anda (diawali 628) untuk login, atau gunakan /menu untuk melihat opsi."
-    )
-
-def menu(update: Update, context: CallbackContext) -> None:
-    """Menampilkan menu utama dan saldo pengguna."""
-    active_user = AuthInstance.get_active_user()
-
-    if active_user:
-        balance = get_balance(AuthInstance.api_key, active_user["tokens"]["id_token"])
-        balance_text = f"Saldo Anda: Rp {balance.get('remaining', 'N/A')}\n"
-        menu_text = (
-            "Pilih opsi:\n"
-            "/cekpaket - Cek paket saya\n"
-            "/xut - Beli paket Unli Turbo\n"
-            "/family - Beli paket Family\n"
-            "/gantiakun - Ganti akun/logout"
-        )
-        update.message.reply_text(f"{balance_text}\n{menu_text}")
-    else:
-        update.message.reply_text("Anda belum login. Silakan kirim nomor XL Anda untuk login.")
-
-def cekpaket(update: Update, context: CallbackContext) -> None:
-    """Mengambil dan menampilkan paket yang dimiliki pengguna."""
-    active_user = AuthInstance.get_active_user()
-    if not active_user:
-        update.message.reply_text("Silakan login terlebih dahulu.")
-        return
-
-    update.message.reply_text("Memuat paket Anda, mohon tunggu...")
-    packages = get_my_packages_data()
-
-    if packages:
-        text = "Paket Anda:\n\n"
-        for i, pkg in enumerate(packages):
-            text += f"{i+1}. {pkg['name']} (Quota: {pkg['remaining_quota']})\n"
-        update.message.reply_text(text)
-    else:
-        update.message.reply_text("Gagal mengambil paket. Silakan coba lagi.")
-
-
-def xut(update: Update, context: CallbackContext) -> None:
-    """Menampilkan daftar paket XUT."""
-    active_user = AuthInstance.get_active_user()
-    if not active_user:
-        update.message.reply_text("Silakan login terlebih dahulu.")
-        return
-
-    packages = get_package_xut()
-    if packages:
-        text = "Paket Unli Turbo (XUT):\n\n"
-        for pkg in packages:
-            text += f"{pkg['number']}. {pkg['name']} - Rp {pkg['price']}\n"
-        update.message.reply_text(text)
-        update.message.reply_text("Pilih paket dengan mengirimkan nomornya. Contoh: `1`")
-
-        # Simpan paket di context untuk diproses di langkah berikutnya
-        context.user_data['xut_packages'] = {p['number']: p for p in packages}
-        context.user_data['state'] = 'awaiting_xut_choice'
-
-    else:
-        update.message.reply_text("Gagal mengambil paket XUT.")
-
-def family(update: Update, context: CallbackContext) -> None:
-    """Meminta kode family dari pengguna."""
-    update.message.reply_text("Silakan kirim kode family yang ingin Anda lihat paketnya.")
-    context.user_data['state'] = 'awaiting_family_code'
-
-def gantiakun(update: Update, context: CallbackContext) -> None:
-    """Menghapus pengguna aktif dan memulai ulang proses login."""
-    AuthInstance.set_active_user(None)
-    update.message.reply_text("Akun berhasil diganti. Silakan kirim nomor baru untuk login.")
-
-# --- Handler untuk Pesan Teks ---
-def handle_text(update: Update, context: CallbackContext) -> None:
-    """Menangani pesan teks apa pun, termasuk alur login dan pembelian."""
-    text = update.message.text
-    user_id = update.effective_user.id
-    current_state = context.user_data.get('state')
-
-    if current_state == 'awaiting_otp':
-        phone_number = context.user_data.get('phone_number')
-        if submit_otp_and_login_session(user_id, phone_number, text):
-            update.message.reply_text("Login berhasil! Gunakan /menu untuk melihat opsi.")
-            context.user_data.clear() # Hapus state
-        else:
-            update.message.reply_text("OTP salah. Silakan coba lagi.")
-
-    elif current_state == 'awaiting_xut_choice':
-        try:
-            choice = int(text)
-            selected_package = context.user_data['xut_packages'].get(choice)
-            if selected_package:
-                active_user = AuthInstance.get_active_user()
-                if active_user:
-                    update.message.reply_text(f"Anda memilih {selected_package['name']}. Memproses pembelian...")
-                    # Panggil fungsi pembelian
-                    purchase_result = settlement_multipayment(AuthInstance.api_key, active_user['tokens'], selected_package['code'], selected_package['price'], selected_package['name'])
-                    if purchase_result and purchase_result.get("status") == "SUCCESS":
-                        update.message.reply_text("Pembelian berhasil!")
-                    else:
-                        update.message.reply_text("Pembelian gagal. Silakan coba lagi.")
-                else:
-                    update.message.reply_text("Anda tidak login. Silakan coba lagi.")
-                context.user_data.clear()
-            else:
-                update.message.reply_text("Pilihan paket tidak valid. Silakan coba lagi.")
-        except ValueError:
-            update.message.reply_text("Masukkan nomor paket yang valid.")
-
-    elif current_state == 'awaiting_family_code':
-        # Panggil fungsi untuk mendapatkan paket berdasarkan kode family
-        packages = get_packages_by_family(text)
-        if packages:
-            text_response = "Paket Family tersedia:\n\n"
-            for pkg in packages:
-                text_response += f"{pkg['number']}. {pkg['name']} - Rp {pkg['price']}\n"
-            update.message.reply_text(text_response)
-        else:
-            update.message.reply_text("Kode family tidak valid atau gagal mengambil data.")
-        context.user_data.clear()
-
-    # Cek apakah input adalah nomor telepon (inisiasi login)
-    elif text.startswith("628") and len(text) > 9:
-        if get_otp_and_handle_session(user_id, text):
-            context.user_data['state'] = 'awaiting_otp'
-            context.user_data['phone_number'] = text
-            update.message.reply_text("Kode OTP telah dikirim. Silakan masukkan kode OTP Anda.")
-        else:
-            update.message.reply_text("Gagal mengirim OTP. Pastikan nomor benar atau coba lagi.")
-    else:
-        update.message.reply_text("Perintah tidak dikenali. Silakan gunakan /start atau /menu.")
 
 # --- Flask Routes ---
 @app.route('/')
 def index():
     return jsonify({"message": "Bot is running! by @MzCoder"})
+
+# --- Command Handlers ---
+def start(update: Update, context: CallbackContext) -> None:
+    """Mengirim pesan sambutan."""
+    update.message.reply_text('Halo! Saya bot manajemen akun. Gunakan /gantiakun untuk memulai atau /menu untuk melihat opsi.')
+
+def menu(update: Update, context: CallbackContext) -> None:
+    """Menampilkan informasi akun dan saldo."""
+    active_user = AuthInstance.get_active_user()
+    if not active_user:
+        update.message.reply_text("Anda belum login. Silakan gunakan /gantiakun.")
+        return
+
+    try:
+        balance = get_balance(AuthInstance.api_key, active_user["tokens"]["id_token"])
+        balance_remaining = balance.get("remaining")
+        balance_expired_at = balance.get("expired_at")
+
+        message = (
+            f"👤 **Akun Saya**\n"
+            f"--------------------------\n"
+            f"• **Nomor**: `{active_user['number']}`\n"
+            f"• **Sisa Saldo**: Rp {balance_remaining}\n"
+            f"• **Berlaku Hingga**: {balance_expired_at}"
+        )
+        update.message.reply_markdown_v2(message, disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Error fetching account info: {e}")
+        update.message.reply_text("Gagal mengambil info akun. Token mungkin kedaluwarsa. Mohon coba login ulang.")
+
+def cekpaket(update: Update, context: CallbackContext) -> None:
+    """Menampilkan paket yang terdaftar."""
+    active_user = AuthInstance.get_active_user()
+    if not active_user:
+        update.message.reply_text("Anda belum login. Silakan gunakan /gantiakun.")
+        return
+
+    try:
+        packages = fetch_my_packages(active_user["tokens"]["id_token"])
+        if packages:
+            message = "📦 **Paket Saya**\n"
+            message += "--------------------------\n"
+            for pkg in packages:
+                message += f"• **Nama**: {pkg.get('name')}\n"
+                message += f"• **Kode Kuota**: `{pkg.get('quota_code')}`\n"
+                message += f"• **Kode Keluarga**: `{pkg.get('family_code')}`\n"
+                message += "--------------------------\n"
+            update.message.reply_markdown_v2(message, disable_web_page_preview=True)
+        else:
+            update.message.reply_text("Tidak ada paket yang ditemukan.")
+    except Exception as e:
+        logger.error(f"Error fetching my packages: {e}")
+        update.message.reply_text("Gagal mengambil data paket. Mohon coba lagi.")
+
+def xut(update: Update, context: CallbackContext) -> None:
+    """Menampilkan paket XUT."""
+    active_user = AuthInstance.get_active_user()
+    if not active_user:
+        update.message.reply_text("Anda belum login. Silakan gunakan /gantiakun.")
+        return
+    
+    try:
+        packages = get_package_xut()
+        if packages:
+            message = "🎁 **Paket XUT**\n"
+            message += "--------------------------\n"
+            for pkg in packages:
+                message += f"• **Nama**: {pkg['name']} - Rp {pkg['price']}\n"
+                message += f"• **Kode**: `{pkg['code']}`\n"
+                message += "--------------------------\n"
+            update.message.reply_markdown_v2(message, disable_web_page_preview=True)
+        else:
+            update.message.reply_text("Gagal mengambil paket XUT.")
+    except Exception as e:
+        logger.error(f"Error fetching XUT packages: {e}")
+        update.message.reply_text("Terjadi kesalahan saat mengambil data paket XUT. Silakan coba lagi.")
+
+
+def family(update: Update, context: CallbackContext) -> None:
+    """Meminta Family Code untuk mencari paket kustom."""
+    update.message.reply_text("Silakan masukkan Family Code:")
+    context.user_data['state'] = 'awaiting_family_code'
+
+def gantiakun(update: Update, context: CallbackContext) -> None:
+    """Meminta nomor telepon untuk login."""
+    update.message.reply_text("Silakan kirimkan nomor telepon Anda (diawali 628):")
+    context.user_data['state'] = 'awaiting_number'
+
+def handle_text(update: Update, context: CallbackContext) -> None:
+    """Menangani pesan teks non-perintah."""
+    state = context.user_data.get('state')
+    text = update.message.text.strip()
+    
+    if state == 'awaiting_number':
+        get_number(update, context)
+    elif state == 'awaiting_otp':
+        get_otp_code(update, context)
+    elif state == 'awaiting_family_code':
+        package_custom_fetch(update, context)
+    else:
+        update.message.reply_text("Maaf, saya tidak mengerti. Silakan gunakan perintah yang ada.")
+
+def get_number(update: Update, context: CallbackContext) -> None:
+    contact_number = update.message.text.strip()
+    if not contact_number.startswith("628") or not contact_number[1:].isdigit():
+        update.message.reply_text("Nomor tidak valid. Mohon pastikan diawali dengan 628.")
+        return
+
+    context.user_data['contact_number'] = contact_number
+    try:
+        subscriber_id = get_otp(contact_number)
+        if subscriber_id:
+            context.user_data['subscriber_id'] = subscriber_id
+            context.user_data['state'] = 'awaiting_otp'
+            update.message.reply_text(f"OTP telah dikirim ke nomor {contact_number}. Silakan masukkan kode OTP:")
+        else:
+            update.message.reply_text("Gagal meminta OTP. Silakan coba lagi nanti.")
+            context.user_data['state'] = None
+    except Exception as e:
+        logger.error(f"Error requesting OTP: {e}")
+        update.message.reply_text("Terjadi kesalahan saat meminta OTP.")
+        context.user_data['state'] = None
+
+def get_otp_code(update: Update, context: CallbackContext) -> None:
+    otp_code = update.message.text.strip()
+    contact_number = context.user_data.get('contact_number')
+    
+    if not contact_number:
+        update.message.reply_text("Sesi login berakhir. Mohon mulai lagi dengan /gantiakun.")
+        context.user_data['state'] = None
+        return
+
+    if not otp_code or len(otp_code) != 6:
+        update.message.reply_text("Kode OTP tidak valid. Mohon coba lagi.")
+        return
+
+    try:
+        tokens = submit_otp(AuthInstance.api_key, contact_number, otp_code)
+        if tokens:
+            AuthInstance.add_refresh_token(contact_number, tokens["refresh_token"])
+            AuthInstance.set_active_user(contact_number)
+            update.message.reply_text("Login berhasil! 🎉")
+        else:
+            update.message.reply_text("Login gagal. Kode OTP mungkin salah.")
+    except Exception as e:
+        logger.error(f"Error submitting OTP: {e}")
+        update.message.reply_text("Terjadi kesalahan saat login.")
+    finally:
+        context.user_data['state'] = None
+
+def package_custom_fetch(update: Update, context: CallbackContext) -> None:
+    family_code = update.message.text.strip()
+    active_user = AuthInstance.get_active_user()
+    if not active_user:
+        update.message.reply_text("Anda belum login. Silakan gunakan /gantiakun.")
+        context.user_data['state'] = None
+        return
+
+    try:
+        packages = get_packages_by_family(family_code)
+        if packages:
+            message = f"🎁 **Paket Family: {packages[0]['name'].split('-')[0].strip()}**\n"
+            message += "--------------------------\n"
+            for pkg in packages:
+                message += f"• **Nama**: {pkg['name']} - Rp {pkg['price']}\n"
+                message += f"• **Kode**: `{pkg['code']}`\n"
+                message += "--------------------------\n"
+            update.message.reply_markdown_v2(message, disable_web_page_preview=True)
+        else:
+            update.message.reply_text("Tidak ada paket yang ditemukan untuk Family Code tersebut.")
+    except Exception as e:
+        logger.error(f"Error fetching custom packages: {e}")
+        update.message.reply_text("Terjadi kesalahan saat mengambil paket kustom. Silakan coba lagi.")
+    finally:
+        context.user_data['state'] = None
+
 
 # --- Fungsi untuk menjalankan Flask ---
 def run_flask():
@@ -203,4 +253,3 @@ if __name__ == "__main__":
 
     # Mulai bot di main thread
     main()
-
