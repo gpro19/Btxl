@@ -1,4 +1,5 @@
-from api_request import get_family
+import json
+from api_request import send_api_request, get_family
 from auth_helper import AuthInstance
 
 def get_packages_by_family(family_code: str):
@@ -10,7 +11,7 @@ def get_packages_by_family(family_code: str):
     packages = []
     
     data = get_family(api_key, tokens, family_code)
-    if not data or not data.get("package_variants"):
+    if not data:
         return None
     
     package_variants = data["package_variants"]
