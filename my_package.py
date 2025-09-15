@@ -1,8 +1,13 @@
 from api_request import get_package, send_api_request
 from auth_helper import AuthInstance
 
-def fetch_my_packages(id_token: str):
+def fetch_my_packages():
     api_key = AuthInstance.api_key
+    tokens = AuthInstance.get_active_tokens()
+    if not tokens:
+        return None
+    
+    id_token = tokens.get("id_token")
     
     path = "api/v8/packages/quota-details"
     
@@ -24,8 +29,7 @@ def fetch_my_packages(id_token: str):
         name = quota["name"]
         family_code = "N/A"
         
-        # Ambil family code
-        package_details = get_package(api_key, {"id_token": id_token}, quota_code)
+        package_details = get_package(api_key, tokens, quota_code)
         if package_details:
             family_code = package_details.get("package_family", {}).get("package_family_code", "N/A")
         
