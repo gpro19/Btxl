@@ -70,10 +70,8 @@ class Auth:
     def get_active_user(self):
         if not self.active_user:
             return None
-        
         if self.last_refresh_time is None or (int(time.time()) - self.last_refresh_time) > 300:
             self.renew_active_user_token()
-        
         return self.active_user
     
     def get_active_tokens(self):
