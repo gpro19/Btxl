@@ -1,9 +1,8 @@
 import os
 import json
 import time
-from api_request import get_new_token, BASE_CIAM_URL, BASIC_AUTH
+from api_request import get_new_token
 
-# Asumsi util.py berisi fungsi ini
 def ensure_api_key(api_key):
     return api_key
 
