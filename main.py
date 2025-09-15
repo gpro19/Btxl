@@ -1,18 +1,20 @@
+import sys
 import os
-import threading
 import json
+import threading
 import logging
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from telegram import Update, Bot
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters,
-    CallbackContext
+    CallbackContext, ConversationHandler
 )
+
 from auth_helper import AuthInstance
 from my_package import fetch_my_packages
 from paket_xut import get_package_xut
 from paket_custom_family import get_packages_by_family
-from api_request import get_balance, get_otp, submit_otp
+from api_request import get_balance, get_otp, submit_otp, BASE_API_URL, BASE_CIAM_URL, BASIC_AUTH, AX_DEVICE_ID, AX_FP, UA
 
 # Konfigurasi logging
 logging.basicConfig(
@@ -22,28 +24,15 @@ logger = logging.getLogger(__name__)
 
 # Variabel Lingkungan
 BOT_TOKEN = "8319444433:AAHRLxXy4hqGnXsVLR_vSwCIsnSirX_vwcE"
-BASE_API_URL = "https://api.myxl.xlaxiata.co.id"
-BASE_CIAM_URL = "https://gede.ciam.xlaxiata.co.id"
-BASIC_AUTH = "OWZjOTdlZDEtNmEzMC00OGQ1LTk1MTYtNjBjNTNjZTNhMTM1OllEV21GNExKajlYSUt3UW56eTJlMmxiMHRKUWIyOW8z"
-AX_DEVICE_ID = "92fb44c0804233eb4d9e29f838223a14"
-AX_FP_KEY = "18b4d589826af50241177961590e6693"
-UA = "myXL / 8.6.0(1179); com.android.vending; (samsung; SM-N935F; SDK 33; Android 13"
-API_KEY = "vT8tINqHaOxXbGE7eOWAhA=="
-AES_KEY_ASCII = "5dccbf08920a5527"
+API_KEY = "ed17ec92-a8e4-42d0-a635-4c62a982ed0a"
 
-# Inisialisasi AuthInstance
+# Auth Instance
 AuthInstance.api_key = API_KEY
-AuthInstance.aes_key_ascii = AES_KEY_ASCII
 
-# Inisialisasi Flask
-app = Flask(__name__)
+# States untuk ConversationHandler
+NUMBER, OTP, FAMILY_CODE = range(3)
 
-# --- Flask Routes ---
-@app.route('/')
-def index():
-    return jsonify({"message": "Bot is running! by @MzCoder"})
-
-# --- Command Handlers ---
+# Command Handlers
 def start(update: Update, context: CallbackContext) -> None:
     """Mengirim pesan sambutan."""
     update.message.reply_text('Halo! Saya bot manajemen akun. Gunakan /gantiakun untuk memulai atau /menu untuk melihat opsi.')
@@ -80,7 +69,7 @@ def cekpaket(update: Update, context: CallbackContext) -> None:
         return
 
     try:
-        packages = fetch_my_packages(active_user["tokens"]["id_token"])
+        packages = fetch_my_packages()
         if packages:
             message = "📦 **Paket Saya**\n"
             message += "--------------------------\n"
@@ -120,63 +109,44 @@ def xut(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("Terjadi kesalahan saat mengambil data paket XUT. Silakan coba lagi.")
 
 
-def family(update: Update, context: CallbackContext) -> None:
-    """Meminta Family Code untuk mencari paket kustom."""
-    update.message.reply_text("Silakan masukkan Family Code:")
-    context.user_data['state'] = 'awaiting_family_code'
-
-def gantiakun(update: Update, context: CallbackContext) -> None:
-    """Meminta nomor telepon untuk login."""
+def gantiakun(update: Update, context: CallbackContext) -> int:
+    """Memulai alur login dengan meminta nomor telepon."""
     update.message.reply_text("Silakan kirimkan nomor telepon Anda (diawali 628):")
-    context.user_data['state'] = 'awaiting_number'
+    return NUMBER
 
-def handle_text(update: Update, context: CallbackContext) -> None:
-    """Menangani pesan teks non-perintah."""
-    state = context.user_data.get('state')
-    text = update.message.text.strip()
-    
-    if state == 'awaiting_number':
-        get_number(update, context)
-    elif state == 'awaiting_otp':
-        get_otp_code(update, context)
-    elif state == 'awaiting_family_code':
-        package_custom_fetch(update, context)
-    else:
-        update.message.reply_text("Maaf, saya tidak mengerti. Silakan gunakan perintah yang ada.")
-
-def get_number(update: Update, context: CallbackContext) -> None:
+def get_number(update: Update, context: CallbackContext) -> int:
+    """Menangani nomor telepon dan meminta OTP."""
     contact_number = update.message.text.strip()
     if not contact_number.startswith("628") or not contact_number[1:].isdigit():
         update.message.reply_text("Nomor tidak valid. Mohon pastikan diawali dengan 628.")
-        return
+        return NUMBER
 
     context.user_data['contact_number'] = contact_number
     try:
         subscriber_id = get_otp(contact_number)
         if subscriber_id:
             context.user_data['subscriber_id'] = subscriber_id
-            context.user_data['state'] = 'awaiting_otp'
             update.message.reply_text(f"OTP telah dikirim ke nomor {contact_number}. Silakan masukkan kode OTP:")
+            return OTP
         else:
             update.message.reply_text("Gagal meminta OTP. Silakan coba lagi nanti.")
-            context.user_data['state'] = None
+            return ConversationHandler.END
     except Exception as e:
         logger.error(f"Error requesting OTP: {e}")
         update.message.reply_text("Terjadi kesalahan saat meminta OTP.")
-        context.user_data['state'] = None
+        return ConversationHandler.END
 
-def get_otp_code(update: Update, context: CallbackContext) -> None:
+def get_otp_code(update: Update, context: CallbackContext) -> int:
+    """Menangani kode OTP dan mengajukannya untuk mendapatkan token."""
     otp_code = update.message.text.strip()
     contact_number = context.user_data.get('contact_number')
-    
     if not contact_number:
         update.message.reply_text("Sesi login berakhir. Mohon mulai lagi dengan /gantiakun.")
-        context.user_data['state'] = None
-        return
+        return ConversationHandler.END
 
     if not otp_code or len(otp_code) != 6:
         update.message.reply_text("Kode OTP tidak valid. Mohon coba lagi.")
-        return
+        return OTP
 
     try:
         tokens = submit_otp(AuthInstance.api_key, contact_number, otp_code)
@@ -184,21 +154,27 @@ def get_otp_code(update: Update, context: CallbackContext) -> None:
             AuthInstance.add_refresh_token(contact_number, tokens["refresh_token"])
             AuthInstance.set_active_user(contact_number)
             update.message.reply_text("Login berhasil! 🎉")
+            return ConversationHandler.END
         else:
             update.message.reply_text("Login gagal. Kode OTP mungkin salah.")
+            return ConversationHandler.END
     except Exception as e:
         logger.error(f"Error submitting OTP: {e}")
-        update.message.reply_text("Terjadi kesalahan saat login.")
-    finally:
-        context.user_data['state'] = None
+        update.message.reply_text("Terjadi kesalahan saat login. Silakan coba lagi nanti.")
+        return ConversationHandler.END
 
-def package_custom_fetch(update: Update, context: CallbackContext) -> None:
+def family(update: Update, context: CallbackContext) -> int:
+    """Meminta Family Code untuk mencari paket kustom."""
+    update.message.reply_text("Silakan masukkan Family Code:")
+    return FAMILY_CODE
+
+def package_custom_fetch(update: Update, context: CallbackContext) -> int:
+    """Mengambil paket kustom berdasarkan Family Code."""
     family_code = update.message.text.strip()
     active_user = AuthInstance.get_active_user()
     if not active_user:
         update.message.reply_text("Anda belum login. Silakan gunakan /gantiakun.")
-        context.user_data['state'] = None
-        return
+        return ConversationHandler.END
 
     try:
         packages = get_packages_by_family(family_code)
@@ -215,41 +191,53 @@ def package_custom_fetch(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         logger.error(f"Error fetching custom packages: {e}")
         update.message.reply_text("Terjadi kesalahan saat mengambil paket kustom. Silakan coba lagi.")
-    finally:
-        context.user_data['state'] = None
+    
+    return ConversationHandler.END
 
-
-# --- Fungsi untuk menjalankan Flask ---
-def run_flask():
-    app.run(host='0.0.0.0', port=8000, debug=True, use_reloader=False)
+def cancel(update: Update, context: CallbackContext) -> int:
+    """Membatalkan alur percakapan."""
+    update.message.reply_text("Proses dibatalkan.")
+    return ConversationHandler.END
 
 def main():
-    """Jalankan bot dan server Flask di thread terpisah."""
-
-    # Siapkan bot Telegram
-    updater = Updater(BOT_TOKEN, use_context=True)
+    """Jalankan bot Telegram."""
+    updater = Updater(BOT_TOKEN)
     dispatcher = updater.dispatcher
 
-    # Daftarkan handler
+    # Handler untuk ganti akun (login)
+    login_handler = ConversationHandler(
+        entry_points=[CommandHandler('gantiakun', gantiakun)],
+        states={
+            NUMBER: [MessageHandler(Filters.text & ~Filters.command, get_number)],
+            OTP: [MessageHandler(Filters.text & ~Filters.command, get_otp_code)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    dispatcher.add_handler(login_handler)
+    
+    # Handler untuk paket kustom
+    custom_package_handler = ConversationHandler(
+        entry_points=[CommandHandler('family', family)],
+        states={
+            FAMILY_CODE: [MessageHandler(Filters.text & ~Filters.command, package_custom_fetch)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    dispatcher.add_handler(custom_package_handler)
+
+    # Handler untuk perintah lainnya
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("menu", menu))
     dispatcher.add_handler(CommandHandler("cekpaket", cekpaket))
     dispatcher.add_handler(CommandHandler("xut", xut))
-    dispatcher.add_handler(CommandHandler("family", family))
-    dispatcher.add_handler(CommandHandler("gantiakun", gantiakun))
 
-    # Handler pesan teks (non-perintah)
-    dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), handle_text))
-
-    # Mulai bot
     updater.start_polling()
     updater.idle()
 
-
 if __name__ == "__main__":
-    # Mulai Flask di thread terpisah
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.start()
-
-    # Mulai bot di main thread
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nExiting the application.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
